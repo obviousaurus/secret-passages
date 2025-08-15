@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Secret Passages — Prototype</title>
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+	:root{
+	  --bg:#0b1020; --panel:#121a33; --muted:#7f8db3; --accent:#ffd166; --accent-2:#00d1b2; --danger:#ff6b6b; --ok:#06d6a0; --white:#fff;
+	}
+	*{box-sizing:border-box}
+	html,body{height:100%;margin:0;background:var(--bg);color:var(--white);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Helvetica,Arial,sans-serif}
+	#app{position:fixed;inset:0;display:grid;grid-template-rows:auto 1fr}
+	header{display:flex;align-items:center;gap:.75rem;padding:.5rem .75rem;background:linear-gradient(180deg,#0e1530,#0b1020);box-shadow:0 2px 12px rgba(0,0,0,.35)}
+	header .title{font-weight:700;letter-spacing:.3px}
+	header .pill{padding:.25rem .5rem;border-radius:999px;background:#141e3f;border:1px solid #1b2852;color:var(--muted);font-size:.8rem}
+	header .row{margin-left:auto;display:flex;gap:.5rem;align-items:center}
+	button, .btn{background:#16224a;border:1px solid #223064;color:var(--white);padding:.45rem .7rem;border-radius:10px;cursor:pointer}
+	button:hover{filter:brightness(1.1)}
+	#map{position:relative}
+	#mapCanvas{position:absolute;inset:0}
+	#arrow{position:absolute;left:50%;bottom:88px;transform:translateX(-50%);width:120px;height:120px;pointer-events:none;opacity:.95}
+	#arrow svg{filter:drop-shadow(0 4px 18px rgba(0,0,0,.6))}
+	#status{position:absolute;left:.75rem;bottom:.75rem;padding:.5rem .7rem;background:#0f1733c8;border:1px solid #1e2b5e;border-radius:12px;font-size:.85rem}
+	#status .band{font-weight:700}
+	#status .dot{display:inline-block;width:.55rem;height:.55rem;border-radius:50%;margin-right:.35rem;vertical-align:middle}
+	.cold{color:#9aa7d1}.warm{color:#ffd166}.hot{color:#ff9f1c}.blaze{color:#06d6a0}
+	.dot.cold{background:#9aa7d1}.dot.warm{background:#ffd166}.dot.hot{background:#ff9f1c}.dot.blaze{background:#06d6a0}
+	#panel{position:absolute;right:.75rem;top:.75rem;width:300px;max-height:65vh;overflow:auto;background:#0f1733c8;border:1px solid #1e2b5e;border-radius:14px;padding:.5rem .75rem}
+	#panel h3{margin:.25rem 0 .5rem 0;font-size:1rem}
+	#keepsakes{display:flex;flex-direction:column;gap:.5rem}
+	.keep{background:#121a3a;border:1px solid #20306a;border-radius:12px;padding:.5rem}
+	.keep small{color:var(--muted)}
+	dialog{border:none;border-radius:16px;padding:0;max-width:540px;width:calc(100% - 2rem);background:#0f1733;color:var(--white);box-shadow:0 20px 60px rgba(0,0,0,.6)}
+	dialog header{background:#10193b;padding:.75rem 1rem;border-bottom:1px solid #1e2b5e}
+	dialog .content{padding:1rem}
+	dialog .actions{display:flex;justify-content:flex-end;gap:.5rem;padding:1rem;border-top:1px solid #1e2b5e}
+	input, select, textarea{width:100%;padding:.55rem .6rem;border-radius:10px;border:1px solid #2a3b7a;background:#0d1430;color:var(--white)}
+	label{font-size:.9rem;color:#b6c2e3;display:block;margin:.5rem 0 .25rem}
+
+	/* Author toolbar */
+	#authorBar{position:absolute;left:50%;top:.75rem;transform:translateX(-50%);display:none;gap:.5rem;align-items:center;background:#0f1733c8;border:1px solid #1e2b5e;border-radius:14px;padding:.4rem .5rem}
+	#authorBar.show{display:flex}
+	#authorBar .sep{width:1px;height:20px;background:#1e2b5e;margin:0 .25rem}
+	#authorList{position:absolute;left:.75rem;top:4.25rem;width:300px;max-height:70vh;overflow:auto;background:#0f1733c8;border:1px solid #1e2b5e;border-radius:14px;padding:.5rem .75rem;display:none}
+	#authorList.show{display:block}
+	.wp{display:flex;align-items:center;gap:.5rem;padding:.35rem .4rem;border-radius:10px;border:1px solid #20306a;background:#121a3a;margin:.3rem 0}
+	.wp .idx{width:1.6rem;height:1.6rem;border-radius:8px;background:#18224a;display:inline-grid;place-items:center;font-size:.8rem;color:#c7d2f6}
+	.wp .grow{flex:1}
+	.wp .mini{display:flex;gap:.25rem}
+	.tag{display:inline-block;padding:.05rem .4rem;border-radius:8px;border:1px solid #2a3b7a;background:#0d1430;color:#cbd6ff;font-size:.72rem}
+
+	/* Proximity ring pulse */
+	#pulse{position:absolute;inset:0;pointer-events:none}
+	.ring{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);border:2px solid rgba(255,255,255,.25);border-radius:50%;width:60px;height:60px;animation:pulse 2s ease-out infinite;opacity:.8}
+	@keyframes pulse{0%{transform:translate(-50%,-50%) scale(.3);opacity:.8}100%{transform:translate(-50%,-50%) scale(2.2);opacity:0}}
+
+	/* Confetti */
+	.confetti{position:absolute;width:8px;height:14px;top:-10px;background:var(--accent);opacity:.9;will-change:transform}
+  </style>
+</head>
+<body>
+<div id="app">
+  <header>
+	<span class="title">Secret Passages</span>
+	<span class="pill" id="levelName">loading…</span>
+	<div class="row">
+	  <button id="btnKeepsakes" title="Keepsakes">📜</button>
+	  <select id="langSelect" title="Language">
+		<option value="en">EN</option>
+		<option value="fr">FR</option>
+	  </select>
+	  <a class="btn" id="btnHelp">?</a>
+	</div>
+  </header>
+  <div id="map">
+	<div id="mapCanvas"></div>
+	<div id="authorBar">
+	  <button id="btnAdd">Add point</button>
+	  <label><input type="checkbox" id="snapToggle"> Snap to street</label>
+	  <div class="sep"></div>
+	  <button id="btnExport">Export JSON</button>
+	  <button id="btnImport">Import JSON</button>
+	  <button id="btnList">List</button>
+	  <button id="btnUndo">Undo</button>
+	  <button id="btnRedo">Redo</button>
+	</div>
+	<div id="authorList"></div>
+	<div id="status"><span class="dot cold" id="bandDot"></span><span class="band" id="bandText">—</span> · <span id="dist">—</span> · R=<span id="rad">—</span></div>
+	<div id="pulse"><div class="ring" id="ring"></div></div>
+	<div id="arrow" aria-hidden="true">
+	  <svg viewBox="0 0 200 200">
+		<defs>
+		  <linearGradient id="g" x1="0" x2="0" y1="0" y2="1">
+			<stop offset="0%" stop-color="#ffd166"/>
+			<stop offset="100%" stop-color="#ff9f1c"/>
+		  </linearGradient>
+		</defs>
+		<g id="arrowHead" transform="translate(100,100)">
+		  <path d="M0,-80 L28,20 L0,5 L-28,20 Z" fill="url(#g)" stroke="#ffffff30" stroke-width="2"/>
+		</g>
+	  </svg>
+	</div>
+	<div id="panel" hidden>
+	  <h3>📜 Keepsakes</h3>
+	  <div id="keepsakes"></div>
+	</div>
+  </div>
+</div>
+
+<dialog id="dlgMessage">
+  <header><strong id="msgTitle">Secret</strong></header>
+  <div class="content">
+	<div id="msgBody">…</div>
+	<audio id="msgAudio" controls style="width:100%;display:none;margin-top:.75rem"></audio>
+	<img id="msgImage" alt="secret" style="max-width:100%;border-radius:12px;border:1px solid #1e2b5e;margin-top:.75rem;display:none"/>
+  </div>
+  <div class="actions"><button id="btnClose">Close</button></div>
+</dialog>
+
+<dialog id="dlgImport">
+  <header><strong>Import level JSON</strong></header>
+  <div class="content"><textarea id="importText" rows="10" placeholder='{"id":"my-level", ...}'></textarea></div>
+  <div class="actions"><button id="btnImportConfirm">Import</button><button id="btnImportCancel">Cancel</button></div>
+</dialog>
+
+<script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/@turf/turf@6.5.0/turf.min.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  // --- utilities ---
+  const $ = sel => document.querySelector(sel);
+  const clamp = (n, a, b) => Math.max(a, Math.min(b, n));
+  const rad = d => d * Math.PI/180; const deg = r => r*180/Math.PI;
+  const haversine = (a,b)=>{
+	const R=6371000; const dLat=rad(b.lat-a.lat), dLng=rad(b.lng-a.lng);
+	const s1=Math.sin(dLat/2)**2 + Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLng/2)**2;
+	return 2*R*Math.asin(Math.sqrt(s1));
+  };
+  const bearingTo = (a,b)=>{
+	const y=Math.sin(rad(b.lng-a.lng))*Math.cos(rad(b.lat));
+	const x=Math.cos(rad(a.lat))*Math.sin(rad(b.lat)) - Math.sin(rad(a.lat))*Math.cos(rad(b.lat))*Math.cos(rad(b.lng-a.lng));
+	return (deg(Math.atan2(y,x))+360)%360;
+  };
+  const fmtM = m => m>999 ? (m/1000).toFixed(2)+" km" : Math.round(m)+" m";
+
+  // i18n
+  const STR = {
+	en:{ keepsakes:"Keepsakes", close:"Close", importTitle:"Import level JSON", promptPIN:"Enter author PIN", wrongPIN:"Wrong PIN", loading:"loading…", help:"Help" },
+	fr:{ keepsakes:"Souvenirs", close:"Fermer", importTitle:"Importer le JSON du niveau", promptPIN:"Entrez le code éditeur", wrongPIN:"Code incorrect", loading:"chargement…", help:"Aide" }
+  };
+  let LANG = (new URLSearchParams(location.search).get("lang")||"en").toLowerCase();
+  $("#langSelect").value = LANG; $("#langSelect").addEventListener("change",()=>{ LANG=$("#langSelect").value; renderKeeps(); persistLocal(); });
+
+  // --- level model ---
+  let LEVEL = null; // loaded JSON
+
+  // Built-in demo (autoload if no levelUrl supplied)
+  const DEFAULT_LEVEL = {
+	id:"demo-secret-passages",
+	title:"Demo Walk",
+	settings:{ defaultUnlockRadiusMeters:15, proximityBandsMeters:[200,60,15], requireOrder:true, drawPolyline:true, bearingMode:"compass-arrow", authorPin:"4321" },
+	waypoints:[
+	  { name:"Start Gate", lat: 52.370216, lng: 4.895168, unlockRadiusMeters:15, message:{ title:{en:"Gate of Sand", fr:"Porte de sable"}, body:{en:"Follow the arrow and watch the ring pulse faster as you get close.", fr:"Suivez la flèche et regardez l'anneau pulser plus vite en approchant."} } },
+	  { name:"Canal Bend", lat: 52.371, lng: 4.9, message:{ title:{en:"Echo Point", fr:"Point d'écho"}, body:{en:"Secrets unlock inside the circle.", fr:"Les secrets se dévoilent dans le cercle."} } },
+	  { name:"Bridge", lat: 52.372, lng: 4.895, message:{ title:{en:"Crossing", fr:"Traversée"}, body:{en:"Tap to play audio if present.", fr:"Touchez pour jouer l'audio s'il est présent."} } }
+	],
+	outro:{ text:{en:"You traced the path!", fr:"Vous avez tracé le chemin !"}, animation:"confetti" }
+  };
+
+  function unwrapText(val){
+	if(val==null) return "";
+	if(typeof val==="string") return val;
+	return val[LANG] || val.en || Object.values(val)[0] || "";
+  }
+  function lsKey(s){ return `sp:${LEVEL?.id||'noid'}:${s}`; }
+
+  // --- map init ---
+  const map = new maplibregl.Map({
+	container: 'mapCanvas',
+	style: 'https://demotiles.maplibre.org/style.json',
+	center: [4.895168,52.370216], zoom: 15, attributionControl: true
+  });
+  map.addControl(new maplibregl.NavigationControl({visualizePitch:true}), 'bottom-right');
+
+  map.on('load', ()=>{
+	map.addSource('path', {type:'geojson', data:{type:'FeatureCollection', features:[]} });
+	map.addLayer({id:'path-line', type:'line', source:'path', paint:{'line-color':['interpolate',['linear'],['zoom'], 12,'#7785c0',18,'#a8b4ff'], 'line-width':['interpolate',['linear'],['zoom'],12,3,18,6]}});
+
+	map.addSource('wps', {type:'geojson', data:{type:'FeatureCollection', features:[]} });
+	map.addLayer({id:'wps-circ', type:'circle', source:'wps', paint:{'circle-color':['case',['==',['get','unlocked'],true],'#06d6a0','#ffd166'],'circle-radius':6,'circle-stroke-color':'#0b1020','circle-stroke-width':2}});
+
+	map.addSource('player', {type:'geojson', data:{type:'Feature', geometry:{type:'Point', coordinates:[4.895168,52.370216]}}});
+	map.addLayer({id:'player-dot', type:'circle', source:'player', paint:{'circle-color':'#00d1b2','circle-radius':6,'circle-stroke-color':'#051026','circle-stroke-width':2}});
+  });
+
+  // --- state ---
+  const params = new URLSearchParams(location.search);
+  const isAuthor = params.get('author')==='1';
+  let currentIndex = 0;
+  let collected = new Set();
+  let pathCoords = [];
+  let lastSampleCoord = null;
+  let watchId = null;
+  let dwellStart = null;
+  let hysteresisArmed = true;
+  let accuracyNow = null;
+  let snapToStreet = false;
+  let undoStack=[]; let redoStack=[];
+
+  // UI refs
+  const bandDot = $('#bandDot'), bandText=$('#bandText'), distSpan=$('#dist'), radSpan=$('#rad');
+  const keepsPanel = $('#panel'), keepsBtn=$('#btnKeepsakes');
+  const arrowHead = document.getElementById('arrowHead');
+
+  // language init
+  function renderKeeps(){
+	$('#btnKeepsakes').textContent = (LANG==='fr'?'📜 Souvenirs':'📜 Keepsakes');
+	const box = $('#keepsakes'); box.innerHTML='';
+	LEVEL.waypoints.forEach((w,i)=>{
+	  if(!collected.has(i)) return;
+	  const item=document.createElement('div'); item.className='keep';
+	  const title = unwrapText(w.message?.title) || w.name || `Waypoint ${i+1}`;
+	  const body = unwrapText(w.message?.body) || '';
+	  item.innerHTML = `<strong>${title}</strong><br><small>${body}</small>`;
+	  item.addEventListener('click',()=> showMessageFor(w));
+	  box.appendChild(item);
+	});
+  }
+
+  keepsBtn.addEventListener('click',()=>{ keepsPanel.hidden=!keepsPanel.hidden; renderKeeps(); });
+  $('#btnHelp').addEventListener('click',()=> alert('Walk with the arrow. The ring pulses faster as you approach. Secrets unlock inside the radius.'));
+
+  // Load level
+  async function loadLevel(){
+	const url = params.get('levelUrl');
+	try{
+	  if(url){ const res=await fetch(url,{cache:'no-store'}); LEVEL=await res.json(); }
+	  else{ LEVEL=DEFAULT_LEVEL; }
+	}catch(e){ console.error(e); LEVEL=DEFAULT_LEVEL; }
+	$('#levelName').textContent = LEVEL.title||LEVEL.id||'Level';
+
+	if(isAuthor && LEVEL.settings && LEVEL.settings.authorPin){
+	  const pin = prompt(LANG==='fr'?STR.fr.promptPIN:STR.en.promptPIN);
+	  if(pin!==String(LEVEL.settings.authorPin)){ alert(LANG==='fr'?STR.fr.wrongPIN:STR.en.wrongPIN); location.search = location.search.replace('author=1',''); return; }
+	}
+
+	try{
+	  const saved = JSON.parse(localStorage.getItem(lsKey('collected'))||'[]');
+	  collected = new Set(saved);
+	  currentIndex = clamp(Number(localStorage.getItem(lsKey('index'))||'0'),0,(LEVEL.waypoints?.length||1)-1);
+	  const path = JSON.parse(localStorage.getItem(lsKey('path'))||'[]'); pathCoords = path;
+	}catch{}
+
+	refreshWaypointsLayer();
+	if(isAuthor){ showAuthorBar(true); bindAuthorEvents(); renderWPList(); }
+	const wp0 = LEVEL.waypoints?.[0]; if(wp0) map.setCenter([wp0.lng, wp0.lat]);
+	startGPS();
+	renderKeeps();
+  }
+
+  function refreshWaypointsLayer(){
+	const feats = LEVEL.waypoints.map((w,i)=>({ type:'Feature', geometry:{type:'Point', coordinates:[w.lng,w.lat]}, properties:{ idx:i, unlocked: collected.has(i) } }));
+	const data = {type:'FeatureCollection', features:feats};
+	if(map.getSource('wps')) map.getSource('wps').setData(data);
+  }
+
+  function persistLocal(){
+	localStorage.setItem(lsKey('collected'), JSON.stringify(Array.from(collected)));
+	localStorage.setItem(lsKey('index'), String(currentIndex));
+	localStorage.setItem(lsKey('path'), JSON.stringify(pathCoords));
+	localStorage.setItem('sp:lang', LANG);
+  }
+
+  // --- GPS ---
+  function startGPS(){
+	if(!navigator.geolocation){ alert('Geolocation not supported'); return; }
+	const opts = { enableHighAccuracy:true, maximumAge:0, timeout:15000 };
+	watchId = navigator.geolocation.watchPosition(onPos, onErr, opts);
+  }
+  function onErr(err){ console.warn(err); }
+
+  function onPos(pos){
+	const {latitude:lat, longitude:lng, accuracy} = pos.coords; accuracyNow = accuracy||null;
+	const p=[lng,lat];
+	if(map.getSource('player')) map.getSource('player').setData({type:'Feature', geometry:{type:'Point', coordinates:p}});
+
+	if(!lastSampleCoord || turf.distance(turf.point(lastSampleCoord), turf.point(p), {units:'meters'})>=3){
+	  pathCoords.push(p); lastSampleCoord=p;
+	  if(map.getSource('path')) map.getSource('path').setData({type:'FeatureCollection', features:[{type:'Feature', geometry:{type:'LineString', coordinates:pathCoords}}]});
+	  persistLocal();
+	}
+
+	const wp = LEVEL.waypoints[currentIndex]; if(!wp) return;
+	const dist = haversine({lat, lng},{lat:wp.lat, lng:wp.lng});
+	const baseRadius = Number(wp.unlockRadiusMeters || LEVEL.settings?.defaultUnlockRadiusMeters || 15);
+
+	let currentRadius = baseRadius;
+	if(accuracyNow && accuracyNow>20) currentRadius = Math.max(currentRadius,25);
+	if(accuracyNow && accuracyNow<=10 && baseRadius<15) currentRadius = baseRadius;
+
+	let bandClass='cold', bandLabel='COLD';
+	const [b1,b2,b3] = LEVEL.settings?.proximityBandsMeters || [200,60,15];
+	if(dist<=b3) { bandClass='blaze'; bandLabel='BLAZING'; }
+	else if(dist<=b2) { bandClass='hot'; bandLabel='HOT'; }
+	else if(dist<=b1) { bandClass='warm'; bandLabel='WARM'; }
+
+	bandDot.className = 'dot '+(bandClass==='blaze'?'blaze':bandClass);
+	bandText.textContent = bandLabel;
+	distSpan.textContent = fmtM(dist);
+	radSpan.textContent = Math.round(currentRadius)+" m";
+
+	const brg = bearingTo({lat,lng},{lat:wp.lat,lng:wp.lng});
+	const heading = deviceHeading.get();
+	const delta = ((brg - heading + 540) % 360) - 180;
+	document.getElementById('arrowHead').style.transform = `translate(0,0) rotate(${delta}deg)`;
+
+	if(hysteresisArmed){
+	  if(dist<=currentRadius){ if(!dwellStart) dwellStart = performance.now(); }
+	  else dwellStart = null;
+	  if(dwellStart && performance.now()-dwellStart >= 2000){
+		collected.add(currentIndex);
+		showMessageFor(wp);
+		currentIndex = Math.min(currentIndex+1, LEVEL.waypoints.length-1);
+		dwellStart = null; hysteresisArmed=false;
+		refreshWaypointsLayer(); renderKeeps(); persistLocal();
+		if(collected.size === LEVEL.waypoints.length){ celebrate(); }
+	  }
+	}else{
+	  if(dist>currentRadius+5) { hysteresisArmed=true; }
+	}
+  }
+
+  // device heading
+  const deviceHeading = (function(){
+	let last=0;
+	if(window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function'){
+	  document.getElementById('arrow').addEventListener('click', async ()=>{
+		try{ const p = await DeviceOrientationEvent.requestPermission(); if(p==='granted'){ bindDO(); } }catch{}
+	  });
+	}else if(window.DeviceOrientationEvent){ bindDO(); }
+	function bindDO(){
+	  window.addEventListener('deviceorientationabsolute', e=>{ if(e.alpha!=null) last = 360 - e.alpha; }, true);
+	  window.addEventListener('deviceorientation', e=>{ if(e.alpha!=null) last = 360 - e.alpha; }, true);
+	}
+	return { get:()=> last };
+  })();
+
+  // message dialog
+  function showMessageFor(wp){
+	const dlg = $('#dlgMessage');
+	$('#msgTitle').textContent = unwrapText(wp.message?.title) || 'Secret';
+	$('#msgBody').textContent = unwrapText(wp.message?.body) || '';
+	const img = $('#msgImage'); const aud = $('#msgAudio');
+	img.style.display='none'; aud.style.display='none';
+	if(wp.message?.mediaImage){ img.src = wp.message.mediaImage; img.style.display='block'; }
+	if(wp.message?.mediaAudio){ aud.src = wp.message.mediaAudio; aud.style.display='block'; }
+	dlg.showModal();
+  }
+  $('#btnClose').addEventListener('click',()=> $('#dlgMessage').close());
+
+  // celebration
+  function celebrate(){
+	for(let i=0;i<120;i++) spawnConfetti();
+  }
+  function spawnConfetti(){
+	const d = document.createElement('div'); d.className='confetti';
+	d.style.left = (Math.random()*100)+'%';
+	d.style.background = Math.random()<.33? '#ffd166' : (Math.random()<.5? '#06d6a0' : '#00d1b2');
+	document.body.appendChild(d);
+	const x=(Math.random()*2-1)*200, y= (Math.random()*200+400);
+	d.animate([{transform:`translate(0,0) rotate(0deg)`},{transform:`translate(${x}px, ${y}px) rotate(${Math.random()*720-360}deg)`}],{duration:1500+Math.random()*1200, easing:'cubic-bezier(.2,.8,.2,1)'}).onfinish=()=>d.remove();
+  }
+
+  // --- authoring ---
+  function showAuthorBar(yes){ document.getElementById('authorBar').classList.toggle('show',!!yes); }
+  document.getElementById('btnList').addEventListener('click',()=> document.getElementById('authorList').classList.toggle('show'));
+  document.getElementById('btnUndo').addEventListener('click',()=>{ if(!undoStack.length) return; redoStack.push(deepcopy(LEVEL.waypoints)); LEVEL.waypoints=undoStack.pop(); refreshWaypointsLayer(); renderWPList(); saveDraft(); });
+  document.getElementById('btnRedo').addEventListener('click',()=>{ if(!redoStack.length) return; undoStack.push(deepcopy(LEVEL.waypoints)); LEVEL.waypoints=redoStack.pop(); refreshWaypointsLayer(); renderWPList(); saveDraft(); });
+  document.getElementById('btnExport').addEventListener('click',()=>{
+	const json = JSON.stringify(LEVEL,null,2);
+	const blob = new Blob([json],{type:'application/json'});
+	const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=(LEVEL.id||'level')+'.json'; a.click();
+  });
+  document.getElementById('btnImport').addEventListener('click',()=>{ document.getElementById('dlgImport').showModal(); });
+  document.getElementById('btnImportCancel').addEventListener('click',()=> document.getElementById('dlgImport').close());
+  document.getElementById('btnImportConfirm').addEventListener('click',()=>{
+	try{ const j=JSON.parse(document.getElementById('importText').value); pushUndo(); LEVEL=j; document.getElementById('dlgImport').close(); refreshWaypointsLayer(); renderWPList(); saveDraft(); }
+	catch(e){ alert('Invalid JSON'); }
+  });
+  document.getElementById('snapToggle').addEventListener('change',e=> snapToStreet = e.target.checked);
+
+  function bindAuthorEvents(){
+	map.on('click', async (e)=>{
+	  if(!addingPoint) return; const lngLat = e.lngLat.wrap(); let pt=[lngLat.lng,lngLat.lat];
+	  if(snapToStreet){ pt = await snappedToRoad(pt) || pt; }
+	  pushUndo();
+	  LEVEL.waypoints.push({ name:`Point ${LEVEL.waypoints.length+1}`, lat:pt[1], lng:pt[0], message:{title:{en:""}, body:{en:""}} });
+	  refreshWaypointsLayer(); renderWPList(); saveDraft(); addingPoint=false; document.getElementById('btnAdd').classList.remove('active');
+	});
+
+	map.on('mousedown','wps-circ', (e)=>{ if(!isAuthor) return; e.preventDefault(); const i=e.features[0].properties.idx|0; dragWaypoint(i); });
+	map.on('click','path-line', async (e)=>{ if(!isAuthor) return; if(!insertingBetween) return; const pt = e.lngLat.wrap(); let p=[pt.lng, pt.lat]; if(snapToStreet){ p=await snappedToRoad(p)||p; }
+	  const coords = LEVEL.waypoints.map(w=>[w.lng,w.lat]);
+	  if(coords.length<2) return;
+	  const line = turf.lineString(coords);
+	  const snap = turf.nearestPointOnLine(line, turf.point(p));
+	  const idx = snap.properties.index;
+	  pushUndo();
+	  LEVEL.waypoints.splice(idx+1,0,{name:`Inserted ${idx+2}`, lat:snap.geometry.coordinates[1], lng:snap.geometry.coordinates[0], message:{title:{en:""}, body:{en:""}}});
+	  refreshWaypointsLayer(); renderWPList(); saveDraft(); insertingBetween=false; document.getElementById('btnAddBetween')?.classList.remove('active');
+	});
+
+	document.getElementById('btnAdd').addEventListener('click',()=>{ addingPoint = !addingPoint; insertingBetween=false; document.getElementById('btnAdd').classList.toggle('active',addingPoint); });
+  }
+
+  let addingPoint=false, insertingBetween=false;
+
+  async function snappedToRoad([lng,lat]){
+	try{
+	  const layers = map.getStyle().layers.filter(l=>(l.type==='line'||l.type==='fill') && /road|highway|street/i.test(l.id)).map(l=>l.id);
+	  const feats = map.queryRenderedFeatures(map.project([lng,lat]), {layers});
+	  if(!feats.length) return [lng,lat];
+	  const lines = feats.slice(0,8).map(f=>{
+		let geom=f.geometry; if(geom.type==='Polygon'){ geom={type:'LineString', coordinates:geom.coordinates[0]}; }
+		if(geom.type==='MultiLineString'){ geom={type:'LineString', coordinates:geom.coordinates.flat()}; }
+		return turf.lineString(geom.coordinates);
+	  });
+	  const fc=turf.featureCollection(lines);
+	  let bestPt=null, bestDist=1e9;
+	  for(const ln of fc.features){
+		const np = turf.nearestPointOnLine(ln, turf.point([lng,lat]));
+		if(np.properties.dist<bestDist){ bestDist=np.properties.dist; bestPt=np; }
+	  }
+	  return bestPt?.geometry?.coordinates || [lng,lat];
+	}catch{ return [lng,lat]; }
+  }
+
+  async function dragWaypoint(i){
+	function onMove(ev){ const p=ev.lngLat.wrap(); let pt=[p.lng,p.lat];
+	  (async ()=>{ if(snapToStreet){ pt=await snappedToRoad(pt)||pt; }
+		LEVEL.waypoints[i].lng=pt[0]; LEVEL.waypoints[i].lat=pt[1]; refreshWaypointsLayer(); })();
+	}
+	function onUp(){ map.off('mousemove',onMove); map.off('mouseup',onUp); saveDraft(); }
+	pushUndo(); map.on('mousemove',onMove); map.on('mouseup',onUp);
+  }
+
+  function renderWPList(){
+	const box=document.getElementById('authorList'); box.innerHTML='<h3>Waypoints</h3>';
+	LEVEL.waypoints.forEach((w,i)=>{
+	  const row=document.createElement('div'); row.className='wp';
+	  row.innerHTML=`<div class="idx">${i+1}</div><div class="grow"><div><strong>${w.name||`Point ${i+1}`}</strong></div><div class="mini"><span class="tag">${w.lat.toFixed(5)}, ${w.lng.toFixed(5)}</span></div></div>`;
+	  const del=document.createElement('button'); del.textContent='Del'; del.onclick=()=>{ pushUndo(); LEVEL.waypoints.splice(i,1); refreshWaypointsLayer(); renderWPList(); saveDraft(); };
+	  const up=document.createElement('button'); up.textContent='↑'; up.onclick=()=>{ if(i===0) return; pushUndo(); const t=LEVEL.waypoints[i-1]; LEVEL.waypoints[i-1]=LEVEL.waypoints[i]; LEVEL.waypoints[i]=t; refreshWaypointsLayer(); renderWPList(); saveDraft(); };
+	  const dn=document.createElement('button'); dn.textContent='↓'; dn.onclick=()=>{ if(i===LEVEL.waypoints.length-1) return; pushUndo(); const t=LEVEL.waypoints[i+1]; LEVEL.waypoints[i+1]=LEVEL.waypoints[i]; LEVEL.waypoints[i]=t; refreshWaypointsLayer(); renderWPList(); saveDraft(); };
+	  const edit=document.createElement('button'); edit.textContent='Edit'; edit.onclick=()=> editWP(i);
+	  row.appendChild(up); row.appendChild(dn); row.appendChild(edit); row.appendChild(del);
+	  box.appendChild(row);
+	});
+	const ib=document.createElement('button'); ib.id='btnAddBetween'; ib.textContent='Insert between (click path)'; ib.onclick=()=>{ insertingBetween=!insertingBetween; ib.classList.toggle('active',insertingBetween); addingPoint=false; document.getElementById('btnAdd').classList.remove('active'); };
+	box.appendChild(ib);
+  }
+
+  function editWP(i){
+	const w=LEVEL.waypoints[i];
+	const dlg=document.createElement('dialog');
+	dlg.innerHTML=`<header><strong>Edit waypoint ${i+1}</strong></header>
+	<div class="content">
+	  <label>Name<input id="wpName" value="${w.name||''}"></label>
+	  <div style="display:grid;grid-template-columns:1fr 1fr;gap:.5rem">
+		<div>
+		  <label>Title (EN)<input id="wpTitleEn" value="${(w.message?.title?.en||w.message?.title||'')}"></label>
+		  <label>Body (EN)<textarea id="wpBodyEn" rows="3">${(w.message?.body?.en||w.message?.body||'')}</textarea></label>
+		</div>
+		<div>
+		  <label>Titre (FR)<input id="wpTitleFr" value="${(w.message?.title?.fr||'')}"></label>
+		  <label>Texte (FR)<textarea id="wpBodyFr" rows="3">${(w.message?.body?.fr||'')}</textarea></label>
+		</div>
+	  </div>
+	  <label>Image URL<input id="wpImg" value="${w.message?.mediaImage||''}"></label>
+	  <label>Audio URL<input id="wpAud" value="${w.message?.mediaAudio||''}"></label>
+	  <label>Unlock radius (m, optional)<input id="wpRad" type="number" min="5" max="50" step="1" value="${w.unlockRadiusMeters||''}"></label>
+	</div>
+	<div class="actions"><button id="ok">Save</button><button id="cancel">Cancel</button></div>`;
+	document.body.appendChild(dlg);
+	dlg.showModal();
+	dlg.querySelector('#ok').onclick=()=>{ pushUndo();
+	  w.name=dlg.querySelector('#wpName').value;
+	  const te=dlg.querySelector('#wpTitleEn').value; const tf=dlg.querySelector('#wpTitleFr').value;
+	  const be=dlg.querySelector('#wpBodyEn').value; const bf=dlg.querySelector('#wpBodyFr').value;
+	  w.message=w.message||{}; w.message.title={en:te, fr:tf}; w.message.body={en:be, fr:bf};
+	  const img=dlg.querySelector('#wpImg').value.trim(); const aud=dlg.querySelector('#wpAud').value.trim();
+	  if(img) w.message.mediaImage=img; else delete w.message.mediaImage;
+	  if(aud) w.message.mediaAudio=aud; else delete w.message.mediaAudio;
+	  const r=dlg.querySelector('#wpRad').value; if(r) w.unlockRadiusMeters=Number(r); else delete w.unlockRadiusMeters;
+	  refreshWaypointsLayer(); renderWPList(); saveDraft(); dlg.close(); dlg.remove();
+	};
+	dlg.querySelector('#cancel').onclick=()=>{ dlg.close(); dlg.remove(); };
+  }
+
+  function pushUndo(){ undoStack.push(deepcopy(LEVEL.waypoints)); redoStack.length=0; }
+  function deepcopy(x){ return JSON.parse(JSON.stringify(x)); }
+  function saveDraft(){ localStorage.setItem(lsKey('draftLevel'), JSON.stringify(LEVEL)); }
+
+  // author UI events
+  function showAuthorBar(yes){ document.getElementById('authorBar').classList.toggle('show',!!yes); }
+  function bindAuthorEvents(){ /* already set above */ }
+  document.getElementById('btnAdd').addEventListener('click',()=>{ addingPoint = !addingPoint; insertingBetween=false; document.getElementById('btnAdd').classList.toggle('active',addingPoint); });
+
+  // start
+  loadLevel();
+})();
+</script>
+</body>
+</html>
