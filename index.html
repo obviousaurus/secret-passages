@@ -58,6 +58,11 @@
 
 	/* Confetti */
 	.confetti{position:absolute;width:8px;height:14px;top:-10px;background:var(--accent);opacity:.9;will-change:transform}
+
+	/* Dev bar */
+	#devBar{position:absolute;left:.75rem;top:.75rem;background:#0f1733c8;border:1px solid #1e2b5e;border-radius:12px;padding:.4rem .5rem;display:none;gap:.4rem;align-items:center}
+	#devBar.show{display:flex}
+	#devBar input{width:7.5rem}
   </style>
 </head>
 <body>
@@ -76,6 +81,18 @@
   </header>
   <div id="map">
 	<div id="mapCanvas"></div>
+
+	<!-- Developer Teleport Mode toolbar (shown with ?dev=1) -->
+	<div id="devBar">
+	  <button id="devUseGPS">Use GPS</button>
+	  <button id="devSim">Simulate</button>
+	  <input id="devLat" placeholder="lat" />
+	  <input id="devLng" placeholder="lng" />
+	  <button id="devSet">Set</button>
+	  <button id="devNext">To next WP</button>
+	  <button id="devClick">Click-to-set</button>
+	</div>
+
 	<div id="authorBar">
 	  <button id="btnAdd">Add point</button>
 	  <label><input type="checkbox" id="snapToggle"> Snap to street</label>
@@ -87,8 +104,10 @@
 	  <button id="btnRedo">Redo</button>
 	</div>
 	<div id="authorList"></div>
+
 	<div id="status"><span class="dot cold" id="bandDot"></span><span class="band" id="bandText">—</span> · <span id="dist">—</span> · R=<span id="rad">—</span></div>
 	<div id="pulse"><div class="ring" id="ring"></div></div>
+
 	<div id="arrow" aria-hidden="true">
 	  <svg viewBox="0 0 200 200">
 		<defs>
@@ -102,6 +121,7 @@
 		</g>
 	  </svg>
 	</div>
+
 	<div id="panel" hidden>
 	  <h3>📜 Keepsakes</h3>
 	  <div id="keepsakes"></div>
@@ -155,8 +175,25 @@
   let LANG = (new URLSearchParams(location.search).get("lang")||"en").toLowerCase();
   $("#langSelect").value = LANG; $("#langSelect").addEventListener("change",()=>{ LANG=$("#langSelect").value; renderKeeps(); persistLocal(); });
 
+  // --- map style: detailed streets with OSM raster tiles (labels baked in) ---
+  const OSM_STYLE = {
+	"version": 8,
+	"sources": {
+	  "osm": {
+		"type": "raster",
+		"tiles": ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
+		"tileSize": 256,
+		"attribution": "© OpenStreetMap contributors"
+	  }
+	},
+	"layers": [
+	  {"id":"background","type":"background","paint":{"background-color":"#cfe9ff"}},
+	  {"id":"osm-tiles","type":"raster","source":"osm"}
+	]
+  };
+
   // --- level model ---
-  let LEVEL = null; // loaded JSON
+  let LEVEL = null;
 
   // Built-in demo (autoload if no levelUrl supplied)
   const DEFAULT_LEVEL = {
@@ -178,17 +215,33 @@
   }
   function lsKey(s){ return `sp:${LEVEL?.id||'noid'}:${s}`; }
 
+  // --- state ---
+  const params = new URLSearchParams(location.search);
+  const isAuthor = params.get('author')==='1';
+  const DEV = params.get('dev')==='1';
+  let currentIndex = 0;
+  let collected = new Set();
+  let pathCoords = [];
+  let lastSampleCoord = null;
+  let accuracyNow = null;
+  let snapToStreet = false;
+  let undoStack=[]; let redoStack=[];
+  let usingSim = false; // true = teleport/sim mode
+  let clickToSet = false;
+
   // --- map init ---
   const map = new maplibregl.Map({
 	container: 'mapCanvas',
-	style: 'https://demotiles.maplibre.org/style.json',
-	center: [4.895168,52.370216], zoom: 15, attributionControl: true
+	style: OSM_STYLE,
+	center: [4.895168,52.370216],
+	zoom: 15,
+	attributionControl: true
   });
   map.addControl(new maplibregl.NavigationControl({visualizePitch:true}), 'bottom-right');
 
   map.on('load', ()=>{
 	map.addSource('path', {type:'geojson', data:{type:'FeatureCollection', features:[]} });
-	map.addLayer({id:'path-line', type:'line', source:'path', paint:{'line-color':['interpolate',['linear'],['zoom'], 12,'#7785c0',18,'#a8b4ff'], 'line-width':['interpolate',['linear'],['zoom'],12,3,18,6]}});
+	map.addLayer({id:'path-line', type:'line', source:'path', paint:{'line-color':'#7785c0','line-width':4,'line-opacity':0.85}});
 
 	map.addSource('wps', {type:'geojson', data:{type:'FeatureCollection', features:[]} });
 	map.addLayer({id:'wps-circ', type:'circle', source:'wps', paint:{'circle-color':['case',['==',['get','unlocked'],true],'#06d6a0','#ffd166'],'circle-radius':6,'circle-stroke-color':'#0b1020','circle-stroke-width':2}});
@@ -197,39 +250,10 @@
 	map.addLayer({id:'player-dot', type:'circle', source:'player', paint:{'circle-color':'#00d1b2','circle-radius':6,'circle-stroke-color':'#051026','circle-stroke-width':2}});
   });
 
-  // --- state ---
-  const params = new URLSearchParams(location.search);
-  const isAuthor = params.get('author')==='1';
-  let currentIndex = 0;
-  let collected = new Set();
-  let pathCoords = [];
-  let lastSampleCoord = null;
-  let watchId = null;
-  let dwellStart = null;
-  let hysteresisArmed = true;
-  let accuracyNow = null;
-  let snapToStreet = false;
-  let undoStack=[]; let redoStack=[];
-
   // UI refs
   const bandDot = $('#bandDot'), bandText=$('#bandText'), distSpan=$('#dist'), radSpan=$('#rad');
   const keepsPanel = $('#panel'), keepsBtn=$('#btnKeepsakes');
   const arrowHead = document.getElementById('arrowHead');
-
-  // language init
-  function renderKeeps(){
-	$('#btnKeepsakes').textContent = (LANG==='fr'?'📜 Souvenirs':'📜 Keepsakes');
-	const box = $('#keepsakes'); box.innerHTML='';
-	LEVEL.waypoints.forEach((w,i)=>{
-	  if(!collected.has(i)) return;
-	  const item=document.createElement('div'); item.className='keep';
-	  const title = unwrapText(w.message?.title) || w.name || `Waypoint ${i+1}`;
-	  const body = unwrapText(w.message?.body) || '';
-	  item.innerHTML = `<strong>${title}</strong><br><small>${body}</small>`;
-	  item.addEventListener('click',()=> showMessageFor(w));
-	  box.appendChild(item);
-	});
-  }
 
   keepsBtn.addEventListener('click',()=>{ keepsPanel.hidden=!keepsPanel.hidden; renderKeeps(); });
   $('#btnHelp').addEventListener('click',()=> alert('Walk with the arrow. The ring pulses faster as you approach. Secrets unlock inside the radius.'));
@@ -258,7 +282,9 @@
 	refreshWaypointsLayer();
 	if(isAuthor){ showAuthorBar(true); bindAuthorEvents(); renderWPList(); }
 	const wp0 = LEVEL.waypoints?.[0]; if(wp0) map.setCenter([wp0.lng, wp0.lat]);
-	startGPS();
+
+	initDevBar();
+	startPositioning();
 	renderKeeps();
   }
 
@@ -268,6 +294,20 @@
 	if(map.getSource('wps')) map.getSource('wps').setData(data);
   }
 
+  function renderKeeps(){
+	$('#btnKeepsakes').textContent = (LANG==='fr'?'📜 Souvenirs':'📜 Keepsakes');
+	const box = $('#keepsakes'); box.innerHTML='';
+	LEVEL.waypoints.forEach((w,i)=>{
+	  if(!collected.has(i)) return;
+	  const item=document.createElement('div'); item.className='keep';
+	  const title = unwrapText(w.message?.title) || w.name || `Waypoint ${i+1}`;
+	  const body = unwrapText(w.message?.body) || '';
+	  item.innerHTML = `<strong>${title}</strong><br><small>${body}</small>`;
+	  item.addEventListener('click',()=> showMessageFor(w));
+	  box.appendChild(item);
+	});
+  }
+
   function persistLocal(){
 	localStorage.setItem(lsKey('collected'), JSON.stringify(Array.from(collected)));
 	localStorage.setItem(lsKey('index'), String(currentIndex));
@@ -275,19 +315,25 @@
 	localStorage.setItem('sp:lang', LANG);
   }
 
-  // --- GPS ---
-  function startGPS(){
-	if(!navigator.geolocation){ alert('Geolocation not supported'); return; }
+  // ---------- POSITIONING (GPS or Sim) ----------
+  function startPositioning(){
+	if(usingSim){ return; }
+	if(!navigator.geolocation){
+	  alert('Geolocation not supported. Enable ?dev=1 to simulate.');
+	  return;
+	}
 	const opts = { enableHighAccuracy:true, maximumAge:0, timeout:15000 };
-	watchId = navigator.geolocation.watchPosition(onPos, onErr, opts);
+	navigator.geolocation.watchPosition(p=>{
+	  handlePosition(p.coords.latitude, p.coords.longitude, p.coords.accuracy||null);
+	}, err=>{ console.warn(err); }, opts);
   }
-  function onErr(err){ console.warn(err); }
 
-  function onPos(pos){
-	const {latitude:lat, longitude:lng, accuracy} = pos.coords; accuracyNow = accuracy||null;
+  function handlePosition(lat,lng,accuracy){
+	accuracyNow = accuracy||null;
 	const p=[lng,lat];
 	if(map.getSource('player')) map.getSource('player').setData({type:'Feature', geometry:{type:'Point', coordinates:p}});
 
+	// trail sampling (every ~3 m)
 	if(!lastSampleCoord || turf.distance(turf.point(lastSampleCoord), turf.point(p), {units:'meters'})>=3){
 	  pathCoords.push(p); lastSampleCoord=p;
 	  if(map.getSource('path')) map.getSource('path').setData({type:'FeatureCollection', features:[{type:'Feature', geometry:{type:'LineString', coordinates:pathCoords}}]});
@@ -298,10 +344,12 @@
 	const dist = haversine({lat, lng},{lat:wp.lat, lng:wp.lng});
 	const baseRadius = Number(wp.unlockRadiusMeters || LEVEL.settings?.defaultUnlockRadiusMeters || 15);
 
+	// adaptive radius
 	let currentRadius = baseRadius;
 	if(accuracyNow && accuracyNow>20) currentRadius = Math.max(currentRadius,25);
 	if(accuracyNow && accuracyNow<=10 && baseRadius<15) currentRadius = baseRadius;
 
+	// proximity band visuals
 	let bandClass='cold', bandLabel='COLD';
 	const [b1,b2,b3] = LEVEL.settings?.proximityBandsMeters || [200,60,15];
 	if(dist<=b3) { bandClass='blaze'; bandLabel='BLAZING'; }
@@ -313,19 +361,21 @@
 	distSpan.textContent = fmtM(dist);
 	radSpan.textContent = Math.round(currentRadius)+" m";
 
+	// arrow rotation (bearing minus device heading)
 	const brg = bearingTo({lat,lng},{lat:wp.lat,lng:wp.lng});
 	const heading = deviceHeading.get();
 	const delta = ((brg - heading + 540) % 360) - 180;
 	document.getElementById('arrowHead').style.transform = `translate(0,0) rotate(${delta}deg)`;
 
+	// dwell + hysteresis
 	if(hysteresisArmed){
-	  if(dist<=currentRadius){ if(!dwellStart) dwellStart = performance.now(); }
-	  else dwellStart = null;
-	  if(dwellStart && performance.now()-dwellStart >= 2000){
+	  if(dist<=currentRadius){ if(!window._dwellStart) window._dwellStart = performance.now(); }
+	  else window._dwellStart = null;
+	  if(window._dwellStart && performance.now()-window._dwellStart >= 2000){
 		collected.add(currentIndex);
 		showMessageFor(wp);
 		currentIndex = Math.min(currentIndex+1, LEVEL.waypoints.length-1);
-		dwellStart = null; hysteresisArmed=false;
+		window._dwellStart = null; hysteresisArmed=false;
 		refreshWaypointsLayer(); renderKeeps(); persistLocal();
 		if(collected.size === LEVEL.waypoints.length){ celebrate(); }
 	  }
@@ -334,7 +384,7 @@
 	}
   }
 
-  // device heading
+  // device heading (tap arrow on iOS to request permission)
   const deviceHeading = (function(){
 	let last=0;
 	if(window.DeviceOrientationEvent && typeof DeviceOrientationEvent.requestPermission === 'function'){
@@ -363,9 +413,7 @@
   $('#btnClose').addEventListener('click',()=> $('#dlgMessage').close());
 
   // celebration
-  function celebrate(){
-	for(let i=0;i<120;i++) spawnConfetti();
-  }
+  function celebrate(){ for(let i=0;i<120;i++) spawnConfetti(); }
   function spawnConfetti(){
 	const d = document.createElement('div'); d.className='confetti';
 	d.style.left = (Math.random()*100)+'%';
@@ -375,7 +423,7 @@
 	d.animate([{transform:`translate(0,0) rotate(0deg)`},{transform:`translate(${x}px, ${y}px) rotate(${Math.random()*720-360}deg)`}],{duration:1500+Math.random()*1200, easing:'cubic-bezier(.2,.8,.2,1)'}).onfinish=()=>d.remove();
   }
 
-  // --- authoring ---
+  // -------- AUTHORING --------
   function showAuthorBar(yes){ document.getElementById('authorBar').classList.toggle('show',!!yes); }
   document.getElementById('btnList').addEventListener('click',()=> document.getElementById('authorList').classList.toggle('show'));
   document.getElementById('btnUndo').addEventListener('click',()=>{ if(!undoStack.length) return; redoStack.push(deepcopy(LEVEL.waypoints)); LEVEL.waypoints=undoStack.pop(); refreshWaypointsLayer(); renderWPList(); saveDraft(); });
@@ -392,6 +440,7 @@
 	catch(e){ alert('Invalid JSON'); }
   });
   document.getElementById('snapToggle').addEventListener('change',e=> snapToStreet = e.target.checked);
+  document.getElementById('btnAdd').addEventListener('click',()=>{ addingPoint = !addingPoint; insertingBetween=false; document.getElementById('btnAdd').classList.toggle('active',addingPoint); });
 
   function bindAuthorEvents(){
 	map.on('click', async (e)=>{
@@ -413,10 +462,7 @@
 	  LEVEL.waypoints.splice(idx+1,0,{name:`Inserted ${idx+2}`, lat:snap.geometry.coordinates[1], lng:snap.geometry.coordinates[0], message:{title:{en:""}, body:{en:""}}});
 	  refreshWaypointsLayer(); renderWPList(); saveDraft(); insertingBetween=false; document.getElementById('btnAddBetween')?.classList.remove('active');
 	});
-
-	document.getElementById('btnAdd').addEventListener('click',()=>{ addingPoint = !addingPoint; insertingBetween=false; document.getElementById('btnAdd').classList.toggle('active',addingPoint); });
   }
-
   let addingPoint=false, insertingBetween=false;
 
   async function snappedToRoad([lng,lat]){
@@ -429,9 +475,8 @@
 		if(geom.type==='MultiLineString'){ geom={type:'LineString', coordinates:geom.coordinates.flat()}; }
 		return turf.lineString(geom.coordinates);
 	  });
-	  const fc=turf.featureCollection(lines);
 	  let bestPt=null, bestDist=1e9;
-	  for(const ln of fc.features){
+	  for(const ln of lines){
 		const np = turf.nearestPointOnLine(ln, turf.point([lng,lat]));
 		if(np.properties.dist<bestDist){ bestDist=np.properties.dist; bestPt=np; }
 	  }
@@ -505,12 +550,21 @@
   function deepcopy(x){ return JSON.parse(JSON.stringify(x)); }
   function saveDraft(){ localStorage.setItem(lsKey('draftLevel'), JSON.stringify(LEVEL)); }
 
-  // author UI events
-  function showAuthorBar(yes){ document.getElementById('authorBar').classList.toggle('show',!!yes); }
-  function bindAuthorEvents(){ /* already set above */ }
-  document.getElementById('btnAdd').addEventListener('click',()=>{ addingPoint = !addingPoint; insertingBetween=false; document.getElementById('btnAdd').classList.toggle('active',addingPoint); });
+  // -------- DEV TELEPORT MODE --------
+  function initDevBar(){
+	const bar = document.getElementById('devBar');
+	if(!DEV){ bar.classList.remove('show'); return; }
+	bar.classList.add('show');
+	const latI=$('#devLat'), lngI=$('#devLng');
+	$('#devUseGPS').onclick=()=>{ usingSim=false; startPositioning(); };
+	$('#devSim').onclick=()=>{ usingSim=true; };
+	$('#devSet').onclick=()=>{ usingSim=true; const lat=parseFloat(latI.value), lng=parseFloat(lngI.value); if(!isNaN(lat)&&!isNaN(lng)){ handlePosition(lat,lng,5); map.setCenter([lng,lat]); } };
+	$('#devNext').onclick=()=>{ usingSim=true; const wp=LEVEL.waypoints[currentIndex]; if(wp){ const lat=wp.lat+(Math.random()*0.0003-0.00015); const lng=wp.lng+(Math.random()*0.0003-0.00015); handlePosition(lat,lng,5); map.setCenter([lng,lat]); } };
+	$('#devClick').onclick=()=>{ clickToSet=!clickToSet; $('#devClick').classList.toggle('active',clickToSet); };
+	map.on('click',(e)=>{ if(!DEV||!clickToSet) return; usingSim=true; const ll=e.lngLat.wrap(); handlePosition(ll.lat,ll.lng,5); latI.value=ll.lat.toFixed(6); lngI.value=ll.lng.toFixed(6); });
+  }
 
-  // start
+  // kick things off
   loadLevel();
 })();
 </script>
