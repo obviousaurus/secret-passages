@@ -248,12 +248,28 @@
 
 	map.addSource('player', {type:'geojson', data:{type:'Feature', geometry:{type:'Point', coordinates:[4.895168,52.370216]}}});
 	map.addLayer({id:'player-dot', type:'circle', source:'player', paint:{'circle-color':'#00d1b2','circle-radius':6,'circle-stroke-color':'#051026','circle-stroke-width':2}});
+
+	/* --- preview line for Insert-between mode --- */
+	map.addSource('author-route', {
+	  type:'geojson',
+	  data:{ type:'Feature', geometry:{ type:'LineString', coordinates:[] } }
+	});
+	map.addLayer({
+	  id:'author-route-line',
+	  type:'line',
+	  source:'author-route',
+	  paint:{
+		'line-color':'#00bcd4',
+		'line-width':6,
+		'line-dasharray':[2,2],
+		'line-opacity':0
+	  }
+	});
   });
 
   // UI refs
   const bandDot = $('#bandDot'), bandText=$('#bandText'), distSpan=$('#dist'), radSpan=$('#rad');
   const keepsPanel = $('#panel'), keepsBtn=$('#btnKeepsakes');
-  const arrowHead = document.getElementById('arrowHead');
 
   keepsBtn.addEventListener('click',()=>{ keepsPanel.hidden=!keepsPanel.hidden; renderKeeps(); });
   $('#btnHelp').addEventListener('click',()=> alert('Walk with the arrow. The ring pulses faster as you approach. Secrets unlock inside the radius.'));
@@ -292,6 +308,7 @@
 	const feats = LEVEL.waypoints.map((w,i)=>({ type:'Feature', geometry:{type:'Point', coordinates:[w.lng,w.lat]}, properties:{ idx:i, unlocked: collected.has(i) } }));
 	const data = {type:'FeatureCollection', features:feats};
 	if(map.getSource('wps')) map.getSource('wps').setData(data);
+	updateRoutePreview(); // keep cyan preview in sync
   }
 
   function renderKeeps(){
@@ -440,7 +457,7 @@
 	catch(e){ alert('Invalid JSON'); }
   });
   document.getElementById('snapToggle').addEventListener('change',e=> snapToStreet = e.target.checked);
-  document.getElementById('btnAdd').addEventListener('click',()=>{ addingPoint = !addingPoint; insertingBetween=false; document.getElementById('btnAdd').classList.toggle('active',addingPoint); });
+  document.getElementById('btnAdd').addEventListener('click',()=>{ addingPoint = !addingPoint; setInsertMode(false); document.getElementById('btnAdd').classList.toggle('active',addingPoint); });
 
   function bindAuthorEvents(){
 	map.on('click', async (e)=>{
@@ -448,52 +465,65 @@
 	  if(snapToStreet){ pt = await snappedToRoad(pt) || pt; }
 	  pushUndo();
 	  LEVEL.waypoints.push({ name:`Point ${LEVEL.waypoints.length+1}`, lat:pt[1], lng:pt[0], message:{title:{en:""}, body:{en:""}} });
-	  refreshWaypointsLayer(); renderWPList(); saveDraft(); addingPoint=false; document.getElementById('btnAdd').classList.remove('active');
+	  refreshWaypointsLayer(); renderWPList(); saveDraft();
+	  // (add mode stays on; press Esc to exit)
 	});
 
 	map.on('mousedown','wps-circ', (e)=>{ if(!isAuthor) return; e.preventDefault(); const i=e.features[0].properties.idx|0; dragWaypoint(i); });
-map.on('click', async (e)=>{
+
+	// Insert between by clicking anywhere near the route
+	map.on('click', async (e)=>{
 	  if(!isAuthor || !insertingBetween) return;
-	
+
 	  let p=[e.lngLat.lng, e.lngLat.lat];
 	  if(snapToStreet){ p=await snappedToRoad(p)||p; }
-	
+
 	  const coords = LEVEL.waypoints.map(w=>[w.lng,w.lat]);
 	  if(coords.length<2){ setInsertMode(false); return; }
-	
+
 	  const line = turf.lineString(coords);
 	  const snap = turf.nearestPointOnLine(line, turf.point(p));
 	  const idx = snap.properties.index;
-	
+
 	  pushUndo();
 	  LEVEL.waypoints.splice(
 		idx+1,
 		0,
-		{
-		  name:`Inserted ${idx+2}`,
+		{ name:`Inserted ${idx+2}`,
 		  lat:snap.geometry.coordinates[1],
 		  lng:snap.geometry.coordinates[0],
-		  message:{title:{en:""}, body:{en:""}}
-		}
+		  message:{title:{en:""}, body:{en:""}} }
 	  );
-	
+
 	  refreshWaypointsLayer();
 	  renderWPList();
 	  saveDraft();
 	  setInsertMode(false); // exit after one insert
 	});
   }
+
   let addingPoint=false, insertingBetween=false;
-  
+
+  // cyan preview of the waypoint route during insert mode
+  function updateRoutePreview(){
+	const coords = (LEVEL?.waypoints||[]).map(w=>[w.lng,w.lat]);
+	if(map.getSource('author-route')){
+	  map.getSource('author-route').setData({type:'Feature', geometry:{type:'LineString', coordinates:coords}});
+	}
+	const visible = insertingBetween && coords.length >= 2;
+	if(map.getLayer('author-route-line')){
+	  map.setPaintProperty('author-route-line','line-opacity', visible ? 0.9 : 0);
+	}
+  }
+
   function setInsertMode(on){
 	insertingBetween = !!on;
 	const btn = document.getElementById('btnAddBetween');
 	if (btn) btn.classList.toggle('active', insertingBetween);
-	if (map.getLayer('path-line')) {
-	  map.setPaintProperty('path-line', 'line-width', insertingBetween ? 8 : 4);
-	}
 	map.getCanvas().style.cursor = insertingBetween ? 'crosshair' : '';
+	updateRoutePreview();
   }
+
   document.addEventListener('keydown', (e)=>{
 	if(e.key==='Escape'){
 	  setInsertMode(false);
@@ -527,7 +557,7 @@ map.on('click', async (e)=>{
 	  (async ()=>{ if(snapToStreet){ pt=await snappedToRoad(pt)||pt; }
 		LEVEL.waypoints[i].lng=pt[0]; LEVEL.waypoints[i].lat=pt[1]; refreshWaypointsLayer(); })();
 	}
-	function onUp(){ map.off('mousemove',onMove); map.off('mouseup',onUp); saveDraft(); }
+	function onUp(){ map.off('mousemove',onMove); map.off('mouseup',onUp); saveDraft(); updateRoutePreview(); }
 	pushUndo(); map.on('mousemove',onMove); map.on('mouseup',onUp);
   }
 
@@ -605,6 +635,7 @@ map.on('click', async (e)=>{
   }
 
   // kick things off
+  let hysteresisArmed=true;
   loadLevel();
 })();
 </script>
