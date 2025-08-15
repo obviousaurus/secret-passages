@@ -3,9 +3,11 @@
 
   ],
   "eablokker.tabsSidebar.config.customKindGroupsOrder" : [
-
+    "html",
+    "markdown"
   ],
   "eablokker.tabsSidebar.config.customTabOrder" : [
-
+    "file:\/\/\/Users\/aaron\/GitHub\/secret-passages\/index.html",
+    "file:\/\/\/Users\/aaron\/GitHub\/secret-passages\/README.md"
   ]
 }
