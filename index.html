@@ -452,18 +452,56 @@
 	});
 
 	map.on('mousedown','wps-circ', (e)=>{ if(!isAuthor) return; e.preventDefault(); const i=e.features[0].properties.idx|0; dragWaypoint(i); });
-	map.on('click','path-line', async (e)=>{ if(!isAuthor) return; if(!insertingBetween) return; const pt = e.lngLat.wrap(); let p=[pt.lng, pt.lat]; if(snapToStreet){ p=await snappedToRoad(p)||p; }
+map.on('click', async (e)=>{
+	  if(!isAuthor || !insertingBetween) return;
+	
+	  let p=[e.lngLat.lng, e.lngLat.lat];
+	  if(snapToStreet){ p=await snappedToRoad(p)||p; }
+	
 	  const coords = LEVEL.waypoints.map(w=>[w.lng,w.lat]);
-	  if(coords.length<2) return;
+	  if(coords.length<2){ setInsertMode(false); return; }
+	
 	  const line = turf.lineString(coords);
 	  const snap = turf.nearestPointOnLine(line, turf.point(p));
 	  const idx = snap.properties.index;
+	
 	  pushUndo();
-	  LEVEL.waypoints.splice(idx+1,0,{name:`Inserted ${idx+2}`, lat:snap.geometry.coordinates[1], lng:snap.geometry.coordinates[0], message:{title:{en:""}, body:{en:""}}});
-	  refreshWaypointsLayer(); renderWPList(); saveDraft(); insertingBetween=false; document.getElementById('btnAddBetween')?.classList.remove('active');
+	  LEVEL.waypoints.splice(
+		idx+1,
+		0,
+		{
+		  name:`Inserted ${idx+2}`,
+		  lat:snap.geometry.coordinates[1],
+		  lng:snap.geometry.coordinates[0],
+		  message:{title:{en:""}, body:{en:""}}
+		}
+	  );
+	
+	  refreshWaypointsLayer();
+	  renderWPList();
+	  saveDraft();
+	  setInsertMode(false); // exit after one insert
 	});
   }
   let addingPoint=false, insertingBetween=false;
+  
+  function setInsertMode(on){
+	insertingBetween = !!on;
+	const btn = document.getElementById('btnAddBetween');
+	if (btn) btn.classList.toggle('active', insertingBetween);
+	if (map.getLayer('path-line')) {
+	  map.setPaintProperty('path-line', 'line-width', insertingBetween ? 8 : 4);
+	}
+	map.getCanvas().style.cursor = insertingBetween ? 'crosshair' : '';
+  }
+  document.addEventListener('keydown', (e)=>{
+	if(e.key==='Escape'){
+	  setInsertMode(false);
+	  addingPoint=false;
+	  const addBtn=document.getElementById('btnAdd');
+	  if(addBtn) addBtn.classList.remove('active');
+	}
+  });
 
   async function snappedToRoad([lng,lat]){
 	try{
@@ -505,7 +543,9 @@
 	  row.appendChild(up); row.appendChild(dn); row.appendChild(edit); row.appendChild(del);
 	  box.appendChild(row);
 	});
-	const ib=document.createElement('button'); ib.id='btnAddBetween'; ib.textContent='Insert between (click path)'; ib.onclick=()=>{ insertingBetween=!insertingBetween; ib.classList.toggle('active',insertingBetween); addingPoint=false; document.getElementById('btnAdd').classList.remove('active'); };
+	const ib=document.createElement('button'); ib.id='btnAddBetween';
+	ib.textContent='Insert between (click path)';
+	ib.onclick = () => setInsertMode(!insertingBetween);
 	box.appendChild(ib);
   }
 
