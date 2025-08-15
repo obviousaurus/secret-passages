@@ -36,7 +36,7 @@
 	dialog header{background:#10193b;padding:.75rem 1rem;border-bottom:1px solid #1e2b5e}
 	dialog .content{padding:1rem}
 	dialog .actions{display:flex;justify-content:flex-end;gap:.5rem;padding:1rem;border-top:1px solid #1e2b5e}
-	input, select, textarea{width:100%;padding:.55rem .6rem;border-radius:10px;border:1px solid #2a3b7a;background:#0d1430;color:var(--white)}
+	input, select, textarea{width:100%;padding:.55rem .6rem;border-radius:10px;border:1px solid #2a3b7a;background:#0d1430;color:#fff}
 	label{font-size:.9rem;color:#b6c2e3;display:block;margin:.5rem 0 .25rem}
 
 	/* Author toolbar */
@@ -265,6 +265,22 @@
 		'line-opacity':0
 	  }
 	});
+
+	/* --- author-only waypoint path (connect all waypoints) --- */
+	map.addSource('wp-path', {
+	  type:'geojson',
+	  data:{ type:'Feature', geometry:{ type:'LineString', coordinates:[] } }
+	});
+	map.addLayer({
+	  id:'wp-path-line',
+	  type:'line',
+	  source:'wp-path',
+	  paint:{
+		'line-color':'#ffd166',
+		'line-width':3,
+		'line-opacity':0.0
+	  }
+	});
   });
 
   // UI refs
@@ -308,7 +324,20 @@
 	const feats = LEVEL.waypoints.map((w,i)=>({ type:'Feature', geometry:{type:'Point', coordinates:[w.lng,w.lat]}, properties:{ idx:i, unlocked: collected.has(i) } }));
 	const data = {type:'FeatureCollection', features:feats};
 	if(map.getSource('wps')) map.getSource('wps').setData(data);
-	updateRoutePreview(); // keep cyan preview in sync
+
+	// keep the author path line in sync
+	if (map.getSource('wp-path')) {
+	  const coords = LEVEL.waypoints.map(w => [w.lng, w.lat]);
+	  map.getSource('wp-path').setData({
+		type:'Feature',
+		geometry:{ type:'LineString', coordinates: coords }
+	  });
+	  if (map.getLayer('wp-path-line')) {
+		map.setPaintProperty('wp-path-line','line-opacity', (isAuthor && coords.length >= 2) ? 0.9 : 0.0);
+	  }
+	}
+
+	updateRoutePreview(); // keep cyan insert-preview in sync, too
   }
 
   function renderKeeps(){
